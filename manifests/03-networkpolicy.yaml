@@ -1,0 +1,104 @@
+# Fix 03: lock down the pod network. Default-deny both directions, then add
+# back only the flows the app needs.
+---
+# 1. Deny all ingress and egress for every pod in the namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: app
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+# 2. Every pod needs DNS. Allow egress to CoreDNS in kube-system on 53.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: app
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+# 3. Allow only web -> internal-api on the app port. Egress on web, ingress on
+#    internal-api (both are otherwise denied by default-deny).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: web-to-internal-api-egress
+  namespace: app
+spec:
+  podSelector:
+    matchLabels:
+      app: web
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: internal-api
+      ports:
+        - protocol: TCP
+          port: 5678
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: internal-api-ingress
+  namespace: app
+spec:
+  podSelector:
+    matchLabels:
+      app: internal-api
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: web
+      ports:
+        - protocol: TCP
+          port: 5678
+---
+# 4. Metadata egress block. Use this ONLY where the workload genuinely needs
+#    broad internet egress: it allows all egress except the link-local metadata
+#    IP. On EKS that IP (169.254.169.254) is the door to the node IAM role, so
+#    carving it out is what stops a compromised pod from minting node creds.
+#    Applying this re-opens general egress, so prefer scoping to real CIDRs when
+#    you can. It is here to show the pattern.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: web-egress-block-metadata
+  namespace: app
+spec:
+  podSelector:
+    matchLabels:
+      app: web
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 169.254.169.254/32

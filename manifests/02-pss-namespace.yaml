@@ -1,0 +1,71 @@
+# Fix 02: enforce Pod Security Standards "restricted" on the namespace, and
+# ship a web Deployment that actually satisfies it.
+#
+# Under a non-root user nginx cannot bind port 80, so we use the unprivileged
+# image which listens on 8080. readOnlyRootFilesystem means the paths nginx
+# writes to (cache, pid, temp) have to be emptyDir mounts.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: app
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: app
+  labels:
+    app: web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: nginx
+          image: nginxinc/nginx-unprivileged:1.27-alpine
+          ports:
+            - containerPort: 8080
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: cache
+              mountPath: /var/cache/nginx
+            - name: pid
+              mountPath: /tmp
+      volumes:
+        - name: cache
+          emptyDir: {}
+        - name: pid
+          emptyDir: {}
+---
+# Point the Service at the new unprivileged port.
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+  namespace: app
+spec:
+  selector:
+    app: web
+  ports:
+    - port: 80
+      targetPort: 8080

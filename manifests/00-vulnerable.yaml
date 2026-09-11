@@ -1,0 +1,101 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: app
+---
+# Config the app actually reads. Used later to scope RBAC down (step 04).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: app
+data:
+  greeting: "hello from app-config"
+---
+# A secret in the namespace, so the token-theft path has something to steal.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: db-credentials
+  namespace: app
+type: Opaque
+stringData:
+  username: appuser
+  password: sup3rs3cr3t-baseline
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: app
+  labels:
+    app: web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      # default SA, mounted token, no securityContext, runs as root
+      containers:
+        - name: nginx
+          image: nginx:1.27
+          ports:
+            - containerPort: 80
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: internal-api
+  namespace: app
+  labels:
+    app: internal-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: internal-api
+  template:
+    metadata:
+      labels:
+        app: internal-api
+    spec:
+      containers:
+        - name: internal-api
+          image: hashicorp/http-echo:1.0
+          args:
+            - "-text=internal-api: you reached the lateral-movement target"
+            - "-listen=:5678"
+          ports:
+            - containerPort: 5678
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: internal-api
+  namespace: app
+spec:
+  selector:
+    app: internal-api
+  ports:
+    - port: 80
+      targetPort: 5678
+---
+# Deliberately over-broad: the default SA every pod uses gets cluster "edit".
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: too-much
+  namespace: app
+subjects:
+  - kind: ServiceAccount
+    name: default
+    namespace: app
+roleRef:
+  kind: ClusterRole
+  name: edit
+  apiGroup: rbac.authorization.k8s.io

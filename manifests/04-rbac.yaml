@@ -1,0 +1,30 @@
+# Fix 04: replace the cluster "edit" grant with the least privilege the app
+# actually needs, which is read access to one ConfigMap.
+#
+# Delete the old binding first:
+#   kubectl -n app delete rolebinding too-much
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: app-config-reader
+  namespace: app
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["app-config"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: app-config-reader
+  namespace: app
+subjects:
+  - kind: ServiceAccount
+    name: default
+    namespace: app
+roleRef:
+  kind: Role
+  name: app-config-reader
+  apiGroup: rbac.authorization.k8s.io
